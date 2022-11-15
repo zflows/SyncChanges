@@ -3,7 +3,7 @@ using NLog;
 using NPoco;
 using System;
 using System.Collections.Generic;
-using System.Data.Common;
+using System.Data;
 using System.Linq;
 using System.Threading;
 
@@ -76,7 +76,7 @@ namespace SyncChanges
 
                 var tables = GetTables(replicationSet.Source);
                 if (replicationSet.Tables != null && replicationSet.Tables.Any())
-                    tables = tables.Select(t => new { Table = t, Name = t.Name.Replace("[", "").Replace("]", "") })
+                    tables = tables.Select(t => new { Table = t, Name = t.BraketlessName })
                         .Where(t => replicationSet.Tables.Any(r => r == t.Name || r == t.Name.Split('.')[1]))
                         .Select(t => t.Table).ToList();
 
@@ -126,7 +126,7 @@ namespace SyncChanges
                 .Where(d => d.Key >= 0 && (sourceVersion < 0 || d.Key < sourceVersion)).ToList();
 
             foreach (var destinations in destinationsByVersion)
-                Replicate(replicationSet.Source, destinations, tables);
+                Replicate(replicationSet.Source, destinations, tables, replicationSet.UseStoredProcedures);
 
             return !Error;
         }
@@ -306,7 +306,7 @@ namespace SyncChanges
             return db;
         }
 
-        private void Replicate(DatabaseInfo source, IGrouping<long, DatabaseInfo> destinations, IList<TableInfo> tables)
+        private void Replicate(DatabaseInfo source, IGrouping<long, DatabaseInfo> destinations, IList<TableInfo> tables, bool callSPs)
         {
             var changeInfo = RetrieveChanges(source, destinations, tables);
             if (changeInfo == null) return;
@@ -346,7 +346,7 @@ namespace SyncChanges
                                 }
                             }
 
-                            PerformChange(db, change);
+                            PerformChange(db, change, callSPs);
 
                             if ((i + 1) >= changes.Count || changes[i + 1].CreationVersion > change.CreationVersion) // there may be more than one change with the same CreationVersion
                             {
@@ -541,47 +541,74 @@ namespace SyncChanges
             }
         }
 
-        private void PerformChange(Database db, Change change)
+        private void PerformChange(Database db, Change change, bool callSPs)
         {
-            var table = change.Table;
-            var tableName = table.Name;
-            var operation = change.Operation;
+            TableInfo table = change.Table;
+            string tableName = table.Name;
+            char operation = change.Operation;
 
             switch (operation)
             {
-                // Insert
-                case 'I':
-                    var insertColumnNames = change.GetColumnNames();
-                    var insertSql = string.Format("insert into {0} ({1}) values ({2})", tableName,
-                        string.Join(", ", insertColumnNames),
-                        string.Join(", ", Parameters(insertColumnNames.Count)));
-                    var insertValues = change.GetValues();
-                    if (table.HasIdentity)
-                        insertSql = $"set IDENTITY_INSERT {tableName} ON; {insertSql}; set IDENTITY_INSERT {tableName} OFF";
-                    Log.Debug($"Executing insert: {insertSql} ({FormatArgs(insertValues)})");
+                case 'I': // Insert
+                    List<string> insertColumnNames = change.GetColumnNames();
+                    string insertSql;
+                    if (callSPs)
+                    {
+                        insertSql = string.Format("EXEC SP_Sync_Insert_{0} {1}",
+                            table.BraketlessName.Replace('.', '_'),
+                            string.Join(", ", GetParametersForSP(insertColumnNames)));
+                    }
+                    else
+                    {
+                        insertSql =string.Format("insert into {0} ({1}) values ({2})", tableName,
+                            string.Join(", ", insertColumnNames),
+                            string.Join(", ", GetParameterAliases(insertColumnNames.Count)));
+                        if (table.HasIdentity)
+                            insertSql = $"set IDENTITY_INSERT {tableName} ON; {insertSql}; set IDENTITY_INSERT {tableName} OFF";
+                    }
+                    object[] newValues = change.GetValues();
+                    Log.Debug($"Executing insert: {insertSql} ({FormatArgs(newValues)})");
                     if (!DryRun)
-                        db.Execute(insertSql, insertValues);
+                        db.Execute(insertSql, CommandType.Text, newValues);
                     break;
-
-                // Update
-                case 'U':
-                    var updateColumnNames = change.Others.Keys.ToList();
-                    var updateSql = string.Format("update {0} set {1} where {2}", tableName,
-                        string.Join(", ", updateColumnNames.Select((c, i) => $"{c} = @{i + change.Keys.Count}")),
-                        PrimaryKeys(change));
-                    var updateValues = change.GetValues();
+                case 'U': // Update
+                    string updateSql;
+                    if (callSPs)
+                    {
+                        List<string> allColumnNames = change.GetColumnNames();
+                        updateSql = string.Format("EXEC SP_Sync_Update_{0} {1}",
+                            table.BraketlessName.Replace('.', '_'),
+                            string.Join(", ", GetParametersForSP(allColumnNames)));
+                    }
+                    else
+                    {
+                        List<string> updateColumnNames = change.Others.Keys.ToList();
+                        updateSql = string.Format("update {0} set {1} where {2}", tableName,
+                            string.Join(", ", updateColumnNames.Select((c, i) => $"{c} = @{i + change.Keys.Count}")),
+                            PrimaryKeys(change));
+                    }
+                    object[] updateValues = change.GetValues();
                     Log.Debug($"Executing update: {updateSql} ({FormatArgs(updateValues)})");
                     if (!DryRun)
-                        db.Execute(updateSql, updateValues);
+                        db.Execute(updateSql, CommandType.Text, updateValues);
                     break;
-
-                // Delete
-                case 'D':
-                    var deleteSql = string.Format("delete from {0} where {1}", tableName, PrimaryKeys(change));
+                case 'D': // Delete
+                    string deleteSql;
+                    if (callSPs)
+                    {
+                        List<string> pkColumns = change.Keys.Keys.ToList();
+                        deleteSql  = string.Format("EXEC SP_Sync_Delete_{0} {1}",
+                            table.BraketlessName.Replace('.', '_'),
+                            string.Join(", ", GetParametersForSP(pkColumns)));
+                    }
+                    else
+                    {
+                        deleteSql = string.Format("delete from {0} where {1}", tableName, PrimaryKeys(change));
+                    }
                     var deleteValues = change.Keys.Values.ToArray();
                     Log.Debug($"Executing delete: {deleteSql} ({FormatArgs(deleteValues)})");
                     if (!DryRun)
-                        db.Execute(deleteSql, deleteValues);
+                        db.Execute(deleteSql, CommandType.Text, deleteValues);
                     break;
             }
         }
@@ -591,7 +618,9 @@ namespace SyncChanges
         private static string PrimaryKeys(Change change) =>
             string.Join(" and ", change.Keys.Keys.Select((c, i) => $"{c} = @{i}"));
 
-        private static IEnumerable<string> Parameters(int n) => Enumerable.Range(0, n).Select(c => "@" + c);
+        private static IEnumerable<string> GetParameterAliases(int n) => Enumerable.Range(0, n).Select(i => "@" + i);
+
+        private static IEnumerable<string> GetParametersForSP(List<string> columnNames) => columnNames.RemoveBakets().Select((cn,i) => $"@{cn}=@{i}");
 
         private long GetCurrentVersion(DatabaseInfo dbInfo)
         {

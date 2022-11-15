@@ -56,6 +56,11 @@ namespace SyncChanges
         /// The tables to be replicated.
         /// </value>
         public List<string> Tables { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Call Stored Procedures for CRUD opertations instead of constructing and executing raw SQL statements
+        /// </summary>
+        public bool UseStoredProcedures { get; set; } = false;
     }
 
     /// <summary>
