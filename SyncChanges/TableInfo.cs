@@ -12,5 +12,6 @@ namespace SyncChanges
         public bool HasIdentity { get; set; }
 
         public string BraketlessName => Name.RemoveBakets();
+        public string SanitizedName => Name.SinitizeForTableName();
     }
 }

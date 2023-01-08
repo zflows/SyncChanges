@@ -27,5 +27,15 @@ namespace SyncChanges
         {
             return sInputs.Select(s => s.RemoveBakets()).ToList();
         }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="sInput"></param>
+        /// <returns></returns>
+        public static string SinitizeForTableName(this string sInput)
+        {
+            return sInput?.RemoveBakets().Replace('.','_');
+        }
     }
 }

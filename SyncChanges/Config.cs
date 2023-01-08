@@ -61,6 +61,16 @@ namespace SyncChanges
         /// Call Stored Procedures for CRUD opertations instead of constructing and executing raw SQL statements
         /// </summary>
         public bool UseStoredProcedures { get; set; } = false;
+
+        /// <summary>
+        /// Copy all data from source do destination by generating insert statements or insert-stored-procedure calls
+        /// </summary>
+        public bool IsInitialLoad { get; set; } = false;
+
+        /// <summary>
+        /// Add Change-Origin to all SQL commands, based on the replication-set name. Highly recommended for 2-way repliaction.
+        /// </summary>
+        public bool UseChangeOrigin { get; set; } = false;
     }
 
     /// <summary>
@@ -83,5 +93,7 @@ namespace SyncChanges
         /// The connection string.
         /// </value>
         public string ConnectionString { get; set; }
+
+        public string Schema { get; set; }
     }
 }
