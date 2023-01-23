@@ -474,7 +474,7 @@ namespace SyncChanges
                     string sql;
                     if (isInitialLoad)
                     {
-                        sql = $@"select 'I', cast({sourceVersion} as bigint), cast(0 as bigint), 
+                        sql = $@"select 'I' as SYS_CHANGE_OPERATION, cast({sourceVersion} as bigint) as SYS_CHANGE_VERSION, cast(0 as bigint) as SYS_CHANGE_CREATION_VERSION, '{source.Name}' as CHANGE_ORIGIN,
                         {string.Join(", ", table.KeyColumns.Concat(table.OtherColumns))}
                         from {tableName}";
                     }
@@ -530,42 +530,55 @@ namespace SyncChanges
             }
 
             changeInfo.Changes.AddRange(changes.OrderBy(c => c.Version).ThenBy(c => c.Table.Name));
+            Log.Debug($"ChangeInfo updated with {changeInfo.Changes.Count} Changes");
 
             ComputeForeignKeyConstraintsToDisable(changeInfo);
+            Log.Debug("Foreing Keys Computed");
 
             return changeInfo;
         }
 
         private void ComputeForeignKeyConstraintsToDisable(ChangeInfo changeInfo)
         {
-            var changes = changeInfo.Changes.OrderBy(c => c.CreationVersion).ThenBy(c => c.Table.Name).ToList();
+            List<Change> changes = changeInfo.Changes
+                .Where(c=> c.CreationVersion < c.Version // was inserted then later updated
+                 && c.Table.ForeignKeyConstraints.Any())
+                .OrderBy(c => c.CreationVersion).ThenBy(c => c.Table.Name)
+                .ToList();
+            Log.Debug($"Computing Foreing Keys for {changes.Count} changes");
 
             for (int i = 0; i < changes.Count; i++)
             {
                 var change = changes[i];
-                if (change.CreationVersion < change.Version) // was inserted then later updated
+                Log.Debug($"CreationVersion: {change.CreationVersion} Version: {change.Version}");
+                //if (change.CreationVersion < change.Version) // was inserted then later updated
+                //{
+                //for (int j = i + 1; j < changes.Count; j++)
+                //{
+                List<Change> intermediateChanges = changes.Where((c, j) => j > i && c.CreationVersion <= change.Version && c.Operation == 'I').ToList();
+                foreach (var intermediateChange in intermediateChanges)
                 {
-                    for (int j = i + 1; j < changes.Count; j++)
-                    {
-                        var intermediateChange = changes[j];
-                        if (intermediateChange.CreationVersion > change.Version) // created later than last update to change
-                            break;
-                        if (intermediateChange.Operation != 'I') continue;
+                    //var intermediateChange = changes[j];
+                    if (intermediateChange.CreationVersion > change.Version) // created later than last update to change
+                        break;
+                    if (intermediateChange.Operation != 'I') continue;
 
-                        // let's look at intermediateChange if it collides with change
-                        foreach (var fk in change.Table.ForeignKeyConstraints.Where(f => f.ReferencedTableName == intermediateChange.Table.Name))
+                    // let's look at intermediateChange if it collides with change
+                    Log.Debug($"CreationVersion: {intermediateChange.CreationVersion} Version:{change.Version}; table; {change.Table.Name} fks:{change.Table.ForeignKeyConstraints.Count}");
+                    foreach (var fk in change.Table.ForeignKeyConstraints.Where(f => f.ReferencedTableName == intermediateChange.Table.Name))
+                    {
+                        var val = change.GetValue(fk.ColumnName);
+                        var refVal = intermediateChange.GetValue(fk.ReferencedColumnName);
+                        Log.Debug($"foreign key for table {change.Table.Name} to {intermediateChange.Table.Name}  from {fk.ColumnName}:{val} to {fk.ReferencedColumnName}:{refVal}");
+                        if (val != null && val.Equals(refVal))
                         {
-                            var val = change.GetValue(fk.ColumnName);
-                            var refVal = intermediateChange.GetValue(fk.ReferencedColumnName);
-                            if (val != null && val.Equals(refVal))
-                            {
-                                // this foreign key constraint needs to be disabled
-                                Log.Info($"Foreign key constraint {fk.ForeignKeyName} needs to be disabled for change #{i + 1} from version {change.CreationVersion} until version {intermediateChange.CreationVersion}");
-                                change.ForeignKeyConstraintsToDisable[fk] = intermediateChange.CreationVersion;
-                            }
+                            // this foreign key constraint needs to be disabled
+                            Log.Info($"Foreign key constraint {fk.ForeignKeyName} needs to be disabled for change #{i + 1} from version {change.CreationVersion} until version {intermediateChange.CreationVersion}");
+                            change.ForeignKeyConstraintsToDisable[fk] = intermediateChange.CreationVersion;
                         }
                     }
-                }
+                 }
+                //}
             }
         }
 
