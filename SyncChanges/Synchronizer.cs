@@ -422,12 +422,12 @@ namespace SyncChanges
 
             if (SyncTableExists(db))
             {
-                db.Execute("update SyncInfo set Version = @1 where replicaion_set=@0", replicationSetName, currentVersion);
+                db.Execute("update SyncInfo set Version = @1 where replication_set=@0", replicationSetName, currentVersion);
             }
             else
             {
-                db.Execute("create table SyncInfo (replicaion_set varchar(120) not null primary key, Version bigint not null)");
-                db.Execute("insert into SyncInfo (replicaion_set,Version) values (@0,@1)", replicationSetName, currentVersion);
+                db.Execute("create table SyncInfo (replication_set varchar(120) not null primary key, Version bigint not null)");
+                db.Execute("insert into SyncInfo (replication_set,Version) values (@0,@1)", replicationSetName, currentVersion);
             }
         }
 
@@ -680,7 +680,7 @@ namespace SyncChanges
 
                 if (SyncTableExists(db))
                 {
-                    currentVersion = db.ExecuteScalar<long>("select top(1) Version from SyncInfo where replicaion_set=@0", replicationSetName);
+                    currentVersion = db.ExecuteScalar<long>("select top(1) Version from SyncInfo where replication_set=@0", replicationSetName);
                     Log.Info($"Database {dbInfo.Name} is at version {currentVersion}");
                 }
                 else
