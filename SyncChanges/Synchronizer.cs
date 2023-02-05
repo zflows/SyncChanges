@@ -555,13 +555,13 @@ namespace SyncChanges
                 //{
                 //for (int j = i + 1; j < changes.Count; j++)
                 //{
-                List<Change> intermediateChanges = changes.Where((c, j) => j > i && c.CreationVersion <= change.Version && c.Operation == 'I').ToList();
+                List<Change> intermediateChanges = changes.Where((c, j) => j > i && c.Operation == 'I' && change.Table.ForeignKeyConstraints.Any(f => f.ReferencedTableName == c.Table.Name)).ToList();
                 foreach (var intermediateChange in intermediateChanges)
                 {
                     //var intermediateChange = changes[j];
                     if (intermediateChange.CreationVersion > change.Version) // created later than last update to change
                         break;
-                    if (intermediateChange.Operation != 'I') continue;
+                    //if (intermediateChange.Operation != 'I') continue;
 
                     // let's look at intermediateChange if it collides with change
                     Log.Debug($"CreationVersion: {intermediateChange.CreationVersion} Version:{change.Version}; table; {change.Table.Name} fks:{change.Table.ForeignKeyConstraints.Count}");
